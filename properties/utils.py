@@ -1,19 +1,46 @@
 from django.core.cache import cache
 from .models import Property
+import json
+from django.core.serializers import serialize
+from django_redis import get_redis_connection
+import logging
 
+logger = logging.getLogger(__name__)
 
 def get_all_properties():
-    """Get all properties, caching the queryset in Redis for 1 hour."""
-    # Try fetching from cache
-    properties = cache.get('all_properties')
+    """
+    Retrieve all properties, utilizing Redis cache.
+    """
+    data = cache.get('all_properties')
+    if data is None:
+        queryset = Property.objects.all()
+        data = serialize('json', queryset)
+        cache.set('all_properties', data, 3600)
+    try:
+        return json.loads(data)
+    except:
+        cache.delete('all_properties')
+        queryset = Property.objects.all()
+        data = serialize('json', queryset)
+        cache.set('all_properties', data, 3600)
+        return json.loads(data)
 
-    if properties is None:
-        print("Cache miss — fetching from database")
-        # Fetch from DB if not in cache
-        properties = list(Property.objects.values())
-        # Store in Redis for 1 hour (3600 seconds)
-        cache.set('all_properties', properties, timeout=3600)
-    else:
-        print("Cache hit — fetched from Redis")
+def get_redis_cache_metrics():
+    """
+    Retrieve Redis cache metrics: hits, misses, and hit ratio.
+    """
+    try:
+        conn = get_redis_connection("default")
+        info = conn.info("stats")
+        hits = info.get("keyspace_hits", 0)
+        misses = info.get("keyspace_misses", 0)
+        total_requests = hits + misses
+        hit_ratio = hits / total_requests if total_requests > 0 else 0
 
-    return properties
+        logger.info(f"'hits': {hits}, 'misses': {misses}, 'hit_ratio': {hit_ratio}")
+        return {"hits": hits, "misses": misses, "hit_ratio": hit_ratio}
+    except Exception as e:
+        logger.error(f"Error connecting to redis: {e}")
+        raise
+
+
